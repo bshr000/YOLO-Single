@@ -1,5 +1,6 @@
 """
 CSP (Cross Stage Partial) Backbone Implementation
+Reference: YOLOv8 / YOLOv5 CSPDarknet structure
 """
 import torch
 import torch.nn as nn
@@ -55,7 +56,7 @@ class C2f(nn.Module):
 
 
 class SPPF(nn.Module):
-    """Spatial Pyramid Pooling - Fast (SPPF) """
+    """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher."""
     def __init__(self, c1, c2, k=5):
         super().__init__()
         c_ = c1 // 2  # hidden channels
@@ -71,6 +72,10 @@ class SPPF(nn.Module):
 
 
 class CSPDarknet(nn.Module):
+    """
+    CSPDarknet Backbone (YOLOv8 style)
+    Returns features from [P3, P4, P5]
+    """
     def __init__(self, depth_multiple=0.33, width_multiple=0.5):
         super().__init__()
         d = depth_multiple

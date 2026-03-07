@@ -1,5 +1,6 @@
 """
-目标检测模型：基于ResNet骨干网络 + FPN + 检测头
+目标检测模型
+基于ResNet骨干网络 + FPN + 检测头
 """
 import torch
 import torch.nn as nn
@@ -9,16 +10,20 @@ from csp_backbone import CSPDarknet
 
 
 class DetectionHead(nn.Module):
+    """
+    解耦检测头：分类和回归使用不同的分支
+    Modified for DFL (Distribution Focal Loss) + No Objectness
+    """
     def __init__(self, in_channels, num_anchors, num_classes, reg_max=16):
         super(DetectionHead, self).__init__()
         # num_anchors is ignored in anchor-free mode, but kept for interface compatibility
         self.num_classes = num_classes
         self.reg_max = reg_max
         
-        # Stem 
+        # Stem 层
         self.stem = nn.Conv2d(in_channels, in_channels, 1)
         
-        # classification branch
+        # 分类分支
         self.cls_convs = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
@@ -29,7 +34,7 @@ class DetectionHead(nn.Module):
         )
         self.cls_pred = nn.Conv2d(in_channels, num_classes, 1)
         
-        # regression branch
+        # 回归分支 (预测 l,t,r,b 的分布)
         self.reg_convs = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
@@ -38,8 +43,11 @@ class DetectionHead(nn.Module):
             nn.BatchNorm2d(in_channels),
             nn.ReLU(inplace=True),
         )
-
+        # Anchor-Free DFL: 预测 4 个值，每个值有 reg_max+1 个 bin
         self.reg_pred = nn.Conv2d(in_channels, 4 * (reg_max + 1), 1)
+        
+        # 移除 Objectness 分支
+        # self.obj_pred = nn.Conv2d(in_channels, 1, 1)
     
     def forward(self, x):
         """
@@ -50,13 +58,16 @@ class DetectionHead(nn.Module):
         """
         B = x.size(0)
         x = self.stem(x)
-
+        
+        # 分类分支
         cls_feat = self.cls_convs(x)
         cls_output = self.cls_pred(cls_feat) # [B, NC, H, W]
-
+        
+        # 回归分支
         reg_feat = self.reg_convs(x)
         reg_output = self.reg_pred(reg_feat) # [B, 4*(reg_max+1), H, W]
-
+        
+        # 拼接: [reg, cls] (注意顺序和loss匹配，且无obj)
         output = torch.cat([reg_output, cls_output], dim=1) # [B, C_total, H, W]
         
         # Permute: [B, C, H, W] -> [B, H, W, C]
@@ -66,17 +77,19 @@ class DetectionHead(nn.Module):
 
 
 class FPN(nn.Module):
-
+    """
+    Feature Pyramid Network
+    """
     def __init__(self, in_channels_list, out_channels=256):
         super(FPN, self).__init__()
         
-        # Lateral layers  
+        # Lateral layers  横向连接
         self.lateral_layers = nn.ModuleList([
             nn.Conv2d(in_channels, out_channels, 1)
             for in_channels in in_channels_list
         ])
         
-        # Output layers 
+        # Output layers 输出层
         self.output_layers = nn.ModuleList([
             nn.Conv2d(out_channels, out_channels, 3, padding=1)
             for _ in in_channels_list
@@ -111,7 +124,7 @@ class FPN(nn.Module):
 class PANFPN(nn.Module):
     """
     PAN-FPN
-    Top-Down: FPN （C3, C4, C5 -> P3_td, P4_td, P5_td）
+    Top-Down: FPN 融合（C3, C4, C5 -> P3_td, P4_td, P5_td）
     Bottom-Up: Path Aggregation（P3_td, P4_td, P5_td -> P3, P4, P5）
     """
     def __init__(self, in_channels_list, out_channels=256):
@@ -120,12 +133,13 @@ class PANFPN(nn.Module):
         # -------------------------------
         # 1. Top-Down 部分（FPN）
         # -------------------------------
-        # Lateral layers 
+        # Lateral layers 横向连接：统一通道数
         self.lateral_layers = nn.ModuleList([
             nn.Conv2d(in_channels, out_channels, 1)
             for in_channels in in_channels_list
         ])
 
+        # FPN 输出层（平滑 3x3 conv）
         self.fpn_output_layers = nn.ModuleList([
             nn.Conv2d(out_channels, out_channels, 3, padding=1)
             for _ in in_channels_list
@@ -136,20 +150,32 @@ class PANFPN(nn.Module):
         # -------------------------------
         num_levels = len(in_channels_list)
 
+        # 自底向上的下采样 conv，用 stride=2 做下采样
+        # 例如：P3 -> DS3 (1/2 尺度) 融合到 P4
         self.pan_downsample_layers = nn.ModuleList([
             nn.Conv2d(out_channels, out_channels, 3, stride=2, padding=1)
             for _ in range(num_levels - 1)
         ])
 
+        # PAN 输出层（再做一次 3x3 conv，提高融合后特征质量）
         self.pan_output_layers = nn.ModuleList([
             nn.Conv2d(out_channels, out_channels, 3, padding=1)
             for _ in range(num_levels)
         ])
 
     def forward(self, features):
+        """
+        Args:
+            features: [C3, C4, C5]  从 backbone 来的多尺度特征
+        Returns:
+            outputs: [P3, P4, P5]   PAN-FPN 最终特征（金字塔）
+        """
+        # ========== Top-Down FPN ==========
+        # 1) 先做 1x1 横向变换
         laterals = [lateral(feat) for lateral, feat in
                     zip(self.lateral_layers, features)]  # [L3, L4, L5]
 
+        # 2) 从顶到底做自顶向下融合：L5 -> L4 -> L3
         for i in range(len(laterals) - 1, 0, -1):
             laterals[i - 1] += F.interpolate(
                 laterals[i],
@@ -157,26 +183,39 @@ class PANFPN(nn.Module):
                 mode='nearest'
             )
 
+        # 3) FPN 输出平滑，得到 top-down 特征
         fpn_feats = [output(lateral) for output, lateral in
                      zip(self.fpn_output_layers, laterals)]
+        # fpn_feats = [P3_td, P4_td, P5_td]
 
+        # ========== Bottom-Up PAN ==========
         pan_feats = [None] * len(fpn_feats)
-        pan_feats[0] = self.pan_output_layers[0](fpn_feats[0])
-        for i in range(1, len(fpn_feats)):
-            down = self.pan_downsample_layers[i - 1](pan_feats[i - 1])  
-            fused = fpn_feats[i] + down                                 
-            pan_feats[i] = self.pan_output_layers[i](fused)             
 
+        # 1) 最底层（分辨率最高的 P3）直接作为起点
+        pan_feats[0] = self.pan_output_layers[0](fpn_feats[0])
+
+        # 2) 自底向上逐层下采样并融合
+        #    P3 -> 下采样 -> 融合到 P4_td
+        #    P4 -> 下采样 -> 融合到 P5_td
+        for i in range(1, len(fpn_feats)):
+            down = self.pan_downsample_layers[i - 1](pan_feats[i - 1])  # 下采样前一层
+            fused = fpn_feats[i] + down                                 # 与上级 FPN 特征相加
+            pan_feats[i] = self.pan_output_layers[i](fused)             # 再做 3x3 conv
+
+        # pan_feats = [P3, P4, P5]
         return pan_feats
 
 
 class ObjectDetector(nn.Module):
+    """
+    目标检测器
+    """
     def __init__(self, num_classes, backbone='cspdarknet_s', num_anchors=1):
         super(ObjectDetector, self).__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
         
-        # backbone
+        # 加载backbone
         if backbone == 'resnet18':
             self.backbone = resnet18(pretrained=True)
             fpn_in_channels = [128, 256, 512]
@@ -207,17 +246,17 @@ class ObjectDetector(nn.Module):
         fpn_out_channels = 256
         self.fpn = PANFPN(fpn_in_channels, fpn_out_channels)
         
-        # detection heads
+        # 检测头 (对每个FPN层)
         self.detect_heads = nn.ModuleList([
             DetectionHead(fpn_out_channels, num_anchors, num_classes)
             for _ in range(3)
         ])
         
-
+        # 网格坐标（用于解码预测）
         self.grids = [None] * 3
         
     def _init_resnet_layers(self):
-
+        # 提取ResNet层
         self.conv1 = self.backbone.conv1
         self.bn1 = self.backbone.bn1
         self.relu = self.backbone.relu
@@ -264,6 +303,11 @@ class ObjectDetector(nn.Module):
         return predictions
     
     def decode_predictions(self, predictions, conf_threshold=0.5, feature_strides=(8, 16, 32)):
+        """
+        解码预测结果 (DFL版本, Anchor-Free)
+        输出格式: List[Tensor], 每张图一个 Tensor: [N, 6] -> [cls, conf, cx, cy, w, h]
+        其中 (cx,cy,w,h) 归一化到输入尺寸 (通常为 640x640 的 letterbox 后图)
+        """
         device = predictions[0].device
         batch_size = predictions[0].size(0)
         all_detections = [[] for _ in range(batch_size)]
@@ -276,6 +320,7 @@ class ObjectDetector(nn.Module):
             B, H, W, _ = pred.shape
             stride = feature_strides[level] if level < len(feature_strides) else feature_strides[-1]
 
+            # 输入尺寸（letterbox 后）可由特征图尺寸 * stride 推出
             in_h = H * stride
             in_w = W * stride
 
@@ -367,16 +412,22 @@ def build_model(config):
 
 
 if __name__ == "__main__":
+    # 测试模型
     model = ObjectDetector(num_classes=80, backbone='cspdarknet_s', num_anchors=1)
     print(model)
     # model = ObjectDetectorpanfpn(num_classes=80, backbone='resnet101', num_anchors=1)
     model.eval()
+    
+    # 创建随机输入
     x = torch.randn(2, 3, 640, 640)
     
     with torch.no_grad():
         predictions = model(x)
+        
         print("Model output:")
         for i, pred in enumerate(predictions):
             print(f"  Level {i}: {pred.shape}")
+        
+        # 测试解码
         detections = model.decode_predictions(predictions, conf_threshold=0.5)
         print(f"\nDetections per image: {[len(d) for d in detections]}")

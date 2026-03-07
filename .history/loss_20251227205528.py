@@ -1,5 +1,5 @@
 """
-目标检测损失函数
+目标检测损失函数 (YOLOv8风格: CIoU + DFL + Soft-BCE + SimOTA Assigner)
 """
 import torch
 import torch.nn as nn
@@ -10,6 +10,10 @@ import math
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
     """
     计算IoU/GIoU/DIoU/CIoU
+    Args:
+        box1: [N, 4] 
+        box2: [N, 4]
+        xywh: 是否是(cx, cy, w, h)格式，False为(x1, y1, x2, y2)
     """
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
@@ -111,6 +115,7 @@ class SimOTAAssigner(nn.Module):
                     torch.zeros(num_anchors, device=device, dtype=torch.bool))
 
         # 1. Preliminary Filtering (in_box or in_center)
+        # 简单起见，使用中心点距离筛选 candidates
         # valid_mask: [num_gt, num_anchors]
         valid_mask, is_in_boxes_and_center = self.get_in_gt_and_in_center_info(
             anc_points, gt_bboxes)
@@ -262,10 +267,18 @@ class SimOTAAssigner(nn.Module):
         gt_cx = (gt_bboxes_expanded[..., 0] + gt_bboxes_expanded[..., 2]) / 2
         gt_cy = (gt_bboxes_expanded[..., 1] + gt_bboxes_expanded[..., 3]) / 2
         
+        # 这里需要 stride 信息来确定 center radius
+        # 为了简化，我们假设 stride=16 (平均值) 或者使用绝对距离 (2.5 * stride)
+        # 由于我们没有传入stride list，这里可以简化为：只检查是否在GT Box内
+        # 或者 传入时带上 stride。为了稳健性，目前仅使用 in_gts 约束
+        
         return is_in_gts, is_in_gts # simplified
 
 
 class DetectionLoss(nn.Module):
+    """
+    目标检测损失 (YOLOv8 Style: CIoU + DFL + Soft-BCE + SimOTA)
+    """
     def __init__(self, num_classes, reg_max=16, lambda_box=7.5, lambda_cls=0.5, lambda_dfl=1.5):
         super(DetectionLoss, self).__init__()
         self.num_classes = num_classes

@@ -367,16 +367,22 @@ def build_model(config):
 
 
 if __name__ == "__main__":
+    # 测试模型
     model = ObjectDetector(num_classes=80, backbone='cspdarknet_s', num_anchors=1)
     print(model)
     # model = ObjectDetectorpanfpn(num_classes=80, backbone='resnet101', num_anchors=1)
     model.eval()
+    
+    # 创建随机输入
     x = torch.randn(2, 3, 640, 640)
     
     with torch.no_grad():
         predictions = model(x)
+        
         print("Model output:")
         for i, pred in enumerate(predictions):
             print(f"  Level {i}: {pred.shape}")
+        
+        # 测试解码
         detections = model.decode_predictions(predictions, conf_threshold=0.5)
         print(f"\nDetections per image: {[len(d) for d in detections]}")

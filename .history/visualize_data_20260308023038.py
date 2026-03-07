@@ -9,7 +9,6 @@ from pathlib import Path
 
 
 def visualize_annotations(image_path, label_path, class_names=None):
-
     image = cv2.imread(image_path)
     if image is None:
         print(f"Cannot read image: {image_path}")

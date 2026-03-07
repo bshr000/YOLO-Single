@@ -1,5 +1,5 @@
 """
-推理脚本 
+推理脚本 (可视化检测结果)
 """
 import os
 import cv2
@@ -184,6 +184,7 @@ def inference(args):
                 plot_one_box(box, img0, label=label, color=colors[cls_id % len(colors)], line_thickness=2)
 
                 if args.save_txt:
+                    # 每次推理该图片前先清空旧结果，避免累计
                     open(txt_path, 'w').close()
                     # Save YOLO normalized to ORIGINAL image (cx,cy,w,h,conf)
                     x1, y1, x2, y2 = box

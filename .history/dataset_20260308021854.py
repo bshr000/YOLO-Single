@@ -10,7 +10,9 @@ from torch.utils.data import Dataset
 from PIL import Image
 import random
 
+
 class YOLODataset(Dataset):
+
     def __init__(self, image_dir, label_dir, input_size=(640, 640), 
                  augment=False, augment_params=None):
         self.image_dir = image_dir

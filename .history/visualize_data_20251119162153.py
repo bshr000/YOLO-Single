@@ -9,7 +9,10 @@ from pathlib import Path
 
 
 def visualize_annotations(image_path, label_path, class_names=None):
-
+    """
+    可视化单张图像的标注
+    """
+    # 读取图像
     image = cv2.imread(image_path)
     if image is None:
         print(f"Cannot read image: {image_path}")
@@ -17,6 +20,7 @@ def visualize_annotations(image_path, label_path, class_names=None):
     
     h, w = image.shape[:2]
     
+    # 读取标签
     if not os.path.exists(label_path):
         print(f"Label file not found: {label_path}")
         return image
@@ -24,6 +28,7 @@ def visualize_annotations(image_path, label_path, class_names=None):
     with open(label_path, 'r') as f:
         lines = f.readlines()
     
+    # 绘制每个目标
     for line in lines:
         data = line.strip().split()
         if len(data) != 5:
@@ -32,25 +37,35 @@ def visualize_annotations(image_path, label_path, class_names=None):
         class_id = int(data[0])
         cx, cy, bw, bh = map(float, data[1:5])
         
+        # 转换为像素坐标
         cx_px = int(cx * w)
         cy_px = int(cy * h)
         bw_px = int(bw * w)
         bh_px = int(bh * h)
         
+        # 计算边界框
         x1 = int(cx_px - bw_px / 2)
         y1 = int(cy_px - bh_px / 2)
         x2 = int(cx_px + bw_px / 2)
         y2 = int(cy_px + bh_px / 2)
         
+        # 随机颜色（基于类别ID）
         np.random.seed(class_id)
         color = tuple(np.random.randint(0, 255, 3).tolist())
+        
+        # 绘制边界框
         cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+        
+        # 绘制中心点
         cv2.circle(image, (cx_px, cy_px), 3, color, -1)
         
+        # 标签
         if class_names and class_id < len(class_names):
             label = f"{class_names[class_id]}"
         else:
             label = f"Class {class_id}"
+        
+        # 绘制标签
         (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(image, (x1, y1 - text_h - 5), (x1 + text_w, y1), color, -1)
         cv2.putText(image, label, (x1, y1 - 5), 
@@ -60,10 +75,14 @@ def visualize_annotations(image_path, label_path, class_names=None):
 
 
 def dataset_statistics(image_dir, label_dir):
+    """
+    统计数据集信息
+    """
     print("\n" + "="*60)
     print("数据集统计")
     print("="*60)
     
+    # 获取所有图像文件
     image_files = []
     for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
         image_files.extend(Path(image_dir).glob(f'*{ext}'))
@@ -74,7 +93,7 @@ def dataset_statistics(image_dir, label_dir):
     if num_images == 0:
         return
     
-
+    # 统计标签
     class_counts = {}
     total_objects = 0
     images_with_labels = 0
@@ -126,12 +145,14 @@ def main():
     parser.add_argument('--stats_only', default=True, action='store_true',
                        help='Only show statistics')
     args = parser.parse_args()
-
+    
+    # 统计信息
     dataset_statistics(args.image_dir, args.label_dir)
     
     if args.stats_only:
         return
-
+    
+    # 获取图像文件
     image_files = []
     for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
         image_files.extend(Path(args.image_dir).glob(f'*{ext}'))
@@ -139,20 +160,29 @@ def main():
     if len(image_files) == 0:
         print("No images found!")
         return
+    
+    # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    # 可视化样本
     num_to_visualize = min(args.num_samples, len(image_files))
     print(f"Visualizing {num_to_visualize} samples...")
     
     for i, img_path in enumerate(image_files[:num_to_visualize]):
         label_name = img_path.stem + '.txt'
         label_path = os.path.join(args.label_dir, label_name)
+        
+        # 可视化
         vis_image = visualize_annotations(str(img_path), label_path)
         
         if vis_image is not None:
+            # 保存
             output_path = os.path.join(args.output_dir, f'vis_{img_path.name}')
             cv2.imwrite(output_path, vis_image)
             print(f"Saved: {output_path}")
+    
     print(f"\nVisualization complete! Check {args.output_dir}/ directory.")
+
 
 if __name__ == "__main__":
     main()
