@@ -1,0 +1,8 @@
+python train.py --config config.yaml
+
+
+python val.py --config config.yaml --checkpoint checkpoints\best_model.pth
+
+python inference.py --source E:\dataset\vedai_visible\images --config config.yaml --checkpoint checkpoints\best_model.pth --output inference_output --save-txt
+
+python inference.py --source E:\dataset\vedai_visible\images --config config.yaml --checkpoint checkpoints\best_model.pth --output inference_output --conf-thres 0.05 --nms-thres 0.45 --save-txt
