@@ -36,10 +36,17 @@ wheels/
 *~
 
 # Data
+data/
+datasets/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
 
 # Output
 output/
-
+results/
 runs/
 checkpoints/
 logs/
