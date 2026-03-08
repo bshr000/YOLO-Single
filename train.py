@@ -1,6 +1,3 @@
-"""
-训练脚本
-"""
 import os
 import yaml
 import torch
@@ -19,9 +16,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
 
 
 def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, config, ema=None, scaler=None):
-    """
-    训练一个epoch
-    """
     model.train()
     
     total_loss = 0
@@ -33,13 +27,10 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, conf
     
     for batch_idx, (images, targets) in enumerate(pbar):
         images = images.to(device)
-        
-        # Forward
         with torch.amp.autocast('cuda', enabled=scaler is not None):
             predictions = model(images)
             loss, loss_dict = criterion(predictions, targets)
         
-        # Backward
         optimizer.zero_grad()
         if scaler is not None:
             scaler.scale(loss).backward()
@@ -51,26 +42,22 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, conf
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # Gradient clipping
             optimizer.step()
-        
-        # EMA Update
+
         if ema:
             ema.update(model)
         
-        # 统计
         total_loss += loss_dict['total']
         total_box_loss += loss_dict['box']
         total_dfl_loss += loss_dict['dfl']
         total_cls_loss += loss_dict['cls']
-        
-        # 更新进度条
+
         pbar.set_postfix({
             'loss': f"{loss_dict['total']:.4f}",
             'box': f"{loss_dict['box']:.4f}",
             'dfl': f"{loss_dict['dfl']:.4f}",
             'cls': f"{loss_dict['cls']:.4f}"
         })
-    
-    # 平均损失
+
     num_batches = len(dataloader)
     avg_loss = total_loss / num_batches
     avg_box_loss = total_box_loss / num_batches
@@ -86,11 +73,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, conf
 
 
 def validate(model, dataloader, criterion, device):
-    """
-    验证
-    """
     model.eval()
-    
     total_loss = 0
     total_box_loss = 0
     total_dfl_loss = 0
@@ -99,18 +82,15 @@ def validate(model, dataloader, criterion, device):
     with torch.no_grad():
         for images, targets in tqdm(dataloader, desc="Validating"):
             images = images.to(device)
-            
-            # Forward
+
             predictions = model(images)
             loss, loss_dict = criterion(predictions, targets)
             
-            # 统计
             total_loss += loss_dict['total']
             total_box_loss += loss_dict['box']
             total_dfl_loss += loss_dict['dfl']
             total_cls_loss += loss_dict['cls']
     
-    # 平均损失
     num_batches = len(dataloader)
     avg_loss = total_loss / num_batches
     avg_box_loss = total_box_loss / num_batches
@@ -126,21 +106,14 @@ def validate(model, dataloader, criterion, device):
 
 
 def main(config_path):
-    # 加载配置
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
-    # 设置随机种子
     setup_seed(42)
-    
-    # 设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    
-    # 创建checkpoint目录
     os.makedirs(config['train']['checkpoint_dir'], exist_ok=True)
-    
-    # 创建数据集
+
     print("Loading datasets...")
     train_dataset = YOLODataset(
         image_dir=config['data']['train_images'],
@@ -160,7 +133,6 @@ def main(config_path):
     print(f"Train dataset: {len(train_dataset)} images")
     print(f"Val dataset: {len(val_dataset)} images")
     
-    # 创建数据加载器
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['train']['batch_size'],
@@ -178,15 +150,12 @@ def main(config_path):
         collate_fn=collate_fn,
         pin_memory=True if device.type == 'cuda' else False
     )
-    
-    # 创建模型
+
     print("Building model...")
     model = build_model(config)
     model = model.to(device)
     
-    # === 计算参数量和 GFLOPS ===
     try:
-        # 1. 计算参数量
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
@@ -195,17 +164,11 @@ def main(config_path):
         print(f"  Total Parameters:     {total_params / 1e6:.2f} M")
         print(f"  Trainable Parameters: {trainable_params / 1e6:.2f} M")
         
-        # 2. 计算 GFLOPS (需要 thop)
         try:
             from thop import profile
-            
-            # 根据配置获取输入尺寸
             h, w = config['model']['input_size']
-            # 创建虚拟输入 [Batch=1, Channel=3, Height, Width]
             dummy_input = torch.zeros(1, 3, h, w).to(device)
             
-            # 计算 FLOPs
-            # verbose=False 防止 thop 输出冗余信息
             flops, _ = profile(model, inputs=(dummy_input,), verbose=False)
             
             print(f"  GFLOPS:               {flops / 1e9:.2f} G")
@@ -219,9 +182,6 @@ def main(config_path):
     except Exception as e:
         print(f"Error summarizing model: {e}")
 
-    
-    # 损失函数
-    # 使用 config 中的新参数名，如果没有则使用默认值（向后兼容）
     criterion = DetectionLoss(
         num_classes=config['data']['num_classes'],
         lambda_box=config['loss'].get('lambda_box', 7.5),
@@ -229,7 +189,6 @@ def main(config_path):
         lambda_dfl=config['loss'].get('lambda_dfl', 1.5)
     )
     
-    # 优化器
     if config['optimizer']['type'] == 'SGD':
         optimizer = optim.SGD(
             model.parameters(),
@@ -245,8 +204,6 @@ def main(config_path):
         )
     else:
         raise ValueError(f"Unsupported optimizer: {config['optimizer']['type']}")
-    
-    # 学习率调度器
     if config['optimizer']['lr_schedule'] == 'cosine':
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
             optimizer, 
@@ -264,11 +221,8 @@ def main(config_path):
     
     # EMA
     ema = ModelEMA(model) if config['train'].get('ema', True) else None
-    
     # AMP Scaler
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
-    
-    # 恢复训练
     start_epoch = 0
     best_loss = float('inf')
     
@@ -281,13 +235,11 @@ def main(config_path):
         if ema and 'ema_state_dict' in checkpoint:
             ema.ema.load_state_dict(checkpoint['ema_state_dict'])
             ema.updates = checkpoint.get('ema_updates', 0)
-        # 如果checkpoint中有scaler状态，也应该加载（可选，这里暂略）
         print(f"Resumed from epoch {start_epoch}")
     
-    # 训练循环
     print("Start training...")
     for epoch in range(start_epoch, config['train']['epochs']):
-        # 训练
+
         train_metrics = train_one_epoch(
             model, train_loader, criterion, optimizer, device, epoch, config, ema, scaler
         )
@@ -297,8 +249,6 @@ def main(config_path):
               f"Dfl: {train_metrics['dfl_loss']:.4f}, "
               f"Cls: {train_metrics['cls_loss']:.4f}")
         
-        # 验证 (使用EMA模型进行验证)
-        # if len(val_dataset) > 0:
         if (epoch + 1) % 5 == 0:  # 每5个epoch验证一次
             eval_model = ema.ema if ema else model
             val_metrics = validate(eval_model, val_loader, criterion, device)
@@ -310,12 +260,9 @@ def main(config_path):
             current_loss = val_metrics['loss']
         else:
             current_loss = train_metrics['loss']
-        
-        # 更新学习率
         if scheduler is not None:
             scheduler.step()
-        
-        # 保存checkpoint
+
         if (epoch + 1) % config['train']['save_interval'] == 0:
             checkpoint_path = os.path.join(
                 config['train']['checkpoint_dir'],
@@ -326,8 +273,7 @@ def main(config_path):
                 model, optimizer, epoch, current_loss, ema
             )
             print(f"Saved checkpoint: {checkpoint_path}")
-        
-        # 保存最佳模型
+
         if current_loss < best_loss:
             best_loss = current_loss
             best_path = os.path.join(
@@ -340,7 +286,6 @@ def main(config_path):
             )
             print(f"Saved best model with loss: {best_loss:.4f}")
     
-    # 保存最终模型
     final_path = os.path.join(
         config['train']['checkpoint_dir'],
         "final_model.pth"

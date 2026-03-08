@@ -1,3 +1,6 @@
+"""
+推理脚本 
+"""
 import os
 import cv2
 import torch
@@ -138,7 +141,12 @@ def inference(args):
                 # Decode (returns normalized xywh relative to letterboxed input)
                 detections = model.decode_predictions(pred, conf_threshold=args.conf_thres)
                 
-                # NMS   
+                # NMS
+                # Need to scale to pixel for NMS? 
+                # utils.non_max_suppression expects [cls, conf, cx, cy, w, h]
+                # It handles IoU internally. 
+                # Perform NMS on normalized coordinates (consistent)
+                
                 det = detections[0] # batch size 1
                 if len(det):
                     det = non_max_suppression(det, nms_threshold=args.nms_thres)
@@ -149,7 +157,9 @@ def inference(args):
         txt_path = output_dir / Path(img_path).with_suffix('.txt').name
         
         if len(det):
+            # det is normalized to letterboxed input size [cls, conf, cx, cy, w, h]
             det = det.cpu().numpy()
+
             # Convert to letterbox pixel coords (x1,y1,x2,y2)
             inp_h, inp_w = input_size
             boxes_xyxy = xywh2xyxy(det[:, 2:6])
@@ -189,7 +199,7 @@ def inference(args):
 if __name__ == '__main__':
     import random
     parser = argparse.ArgumentParser()
-    parser.add_argument('--source', type=str, default="/mnt/data/zxy/dataset/vedai_8_double/images/visible/val", help='file/dir/URL/glob, 0 for webcam')
+    parser.add_argument('--source', type=str, default="E:\zpersonal\Github\YOLO-Single\data\\val_images", help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--config', type=str, default='config.yaml', help='model config')
     parser.add_argument('--checkpoint', type=str, default='checkpoints/best_model.pth', help='model checkpoint')
     parser.add_argument('--output', type=str, default='inference_output', help='output directory')

@@ -1,5 +1,5 @@
 """
-目标检测损失函数 (YOLOv8风格: CIoU + DFL + Soft-BCE + SimOTA Assigner)
+目标检测损失函数
 """
 import torch
 import torch.nn as nn
@@ -10,10 +10,6 @@ import math
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
     """
     计算IoU/GIoU/DIoU/CIoU
-    Args:
-        box1: [N, 4] 
-        box2: [N, 4]
-        xywh: 是否是(cx, cy, w, h)格式，False为(x1, y1, x2, y2)
     """
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
@@ -115,7 +111,6 @@ class SimOTAAssigner(nn.Module):
                     torch.zeros(num_anchors, device=device, dtype=torch.bool))
 
         # 1. Preliminary Filtering (in_box or in_center)
-        # 简单起见，使用中心点距离筛选 candidates
         # valid_mask: [num_gt, num_anchors]
         valid_mask, is_in_boxes_and_center = self.get_in_gt_and_in_center_info(
             anc_points, gt_bboxes)
@@ -262,64 +257,15 @@ class SimOTAAssigner(nn.Module):
         b = gt_bboxes_expanded[..., 3] - anchors_expanded[..., 1]
         
         is_in_gts = torch.stack([l, t, r, b], dim=-1).min(dim=-1)[0] > 0.01
-
-        # Fallback for small objects: if a GT has no anchor inside it,
-        # we select the nearest anchors to its center.
-        # anchor_points: [A, 2] (cx, cy)
-        # gt_bboxes: [G, 4]
+        
+        # Check if anchor is inside center region
         gt_cx = (gt_bboxes_expanded[..., 0] + gt_bboxes_expanded[..., 2]) / 2
         gt_cy = (gt_bboxes_expanded[..., 1] + gt_bboxes_expanded[..., 3]) / 2
-        anc_cx = anchors_expanded[..., 0]
-        anc_cy = anchors_expanded[..., 1]
-        
-        # Calculate distance between all anchors and all GT centers
-        # dists: [G, A]
-        dists = (gt_cx - anc_cx)**2 + (gt_cy - anc_cy)**2
-        
-        # Check which GTs have no valid anchor in is_in_gts
-        # valid_counts: [G]
-        valid_counts = is_in_gts.sum(dim=1)
-        
-        # For GTs with no candidates, pick top-k (e.g. 1) nearest anchors
-        # This is a simplified fallback
-        
-        # We can just union the nearest candidates with is_in_gts to be safe
-        # Find k nearest anchors for EACH GT
-        # We use k=3 to ensure enough candidates for small objects
-        # k = min(3, num_anchors)
-        # _, nearest_indices = torch.topk(dists, k, dim=1, largest=False)
-        # nearest_mask = torch.zeros_like(is_in_gts)
-        # nearest_mask.scatter_(1, nearest_indices, True)
-        # is_in_gts = is_in_gts | nearest_mask
-        
-        # Or more strict fallback: Only add if count == 0
-        if (valid_counts == 0).any():
-             # Get indices of GTs that need help
-             problematic_gt_mask = (valid_counts == 0) # [G]
-             
-             # For these GTs, find nearest anchor
-             # dists[problematic_gt_mask]: [N_prob, A]
-             _, nearest_indices = torch.topk(dists[problematic_gt_mask], k=1, dim=1, largest=False)
-             
-             # Update is_in_gts
-             # We need to map back to [G, A]
-             # It's tricky with masking. Let's do a loop or advanced indexing.
-             # Easier: just update the mask for all GTs using nearest logic if valid_counts is 0
-             # But let's just add nearest 1 anchor for ALL GTs as a safe baseline.
-             # This ensures every GT has at least 1 candidate.
-             _, nearest_indices = torch.topk(dists, k=1, dim=1, largest=False)
-             nearest_mask = torch.zeros_like(is_in_gts)
-             nearest_mask.scatter_(1, nearest_indices, True)
-             
-             is_in_gts = is_in_gts | nearest_mask
         
         return is_in_gts, is_in_gts # simplified
 
 
 class DetectionLoss(nn.Module):
-    """
-    目标检测损失 (YOLOv8 Style: CIoU + DFL + Soft-BCE + SimOTA)
-    """
     def __init__(self, num_classes, reg_max=16, lambda_box=7.5, lambda_cls=0.5, lambda_dfl=1.5):
         super(DetectionLoss, self).__init__()
         self.num_classes = num_classes
@@ -345,7 +291,6 @@ class DetectionLoss(nn.Module):
         pred_scores_list = []
         pred_regs_list = []
         anchors_list = []
-        strides_list = []
         
         feature_strides = [8, 16, 32]
         
@@ -380,7 +325,6 @@ class DetectionLoss(nn.Module):
             ay = (y + 0.5) * stride
             anchor_points = torch.stack([ax, ay], dim=-1) # [HW, 2]
             anchors_list.append(anchor_points)
-            strides_list.append(torch.full((H * W,), stride, device=device))
             
             # Decode xyxy
             # ltrb -> xyxy
@@ -396,11 +340,11 @@ class DetectionLoss(nn.Module):
         pd_scores = torch.cat(pred_scores_list, dim=1)
         pd_bboxes = torch.cat(pred_regs_list, dim=1)
         anc_points = torch.cat(anchors_list, dim=0)
-        strides_all = torch.cat(strides_list, dim=0) # [N_all]
         
-        loss_box_sum = torch.tensor(0.0, device=device)
-        loss_cls_sum = torch.tensor(0.0, device=device)
-        loss_dfl_sum = torch.tensor(0.0, device=device)
+        total_loss = 0
+        loss_box_sum = 0
+        loss_cls_sum = 0
+        loss_dfl_sum = 0
         num_fg = 0
         
         # Loop over batch (SimOTA is easier per image)
@@ -439,7 +383,6 @@ class DetectionLoss(nn.Module):
             )
             
             num_pos = fg_mask.sum()
-            # print(f"DEBUG: Batch {b}, num_pos: {num_pos}")
             if num_pos > 0:
                 num_fg += num_pos
                 
@@ -483,11 +426,6 @@ class DetectionLoss(nn.Module):
                 t_b = t_box_pos[:, 3] - anc_pos[:, 1]
                 t_ltrb = torch.stack([t_l, t_t, t_r, t_b], dim=-1)
                 
-                # Normalize t_ltrb by stride for DFL
-                # DFL expects values in [0, reg_max]
-                strides_pos = strides_all[fg_mask].unsqueeze(-1)
-                t_ltrb = t_ltrb / strides_pos
-                
                 loss_dfl_sum += self.dfl(pos_dist.view(-1, self.reg_max + 1), t_ltrb.view(-1))
                 
             else:
@@ -508,3 +446,24 @@ class DetectionLoss(nn.Module):
             'dfl': loss_dfl.item()
         }
 
+
+if __name__ == "__main__":
+    # Test
+    num_classes = 80
+    reg_max = 16
+    criterion = DetectionLoss(num_classes, reg_max=reg_max)
+    
+    # Fake Pred: [B, H, W, 4*(16+1) + 80]
+    B, H, W = 2, 20, 20
+    C = 4 * (reg_max + 1) + num_classes
+    pred = torch.randn(B, H, W, C)
+    
+    target1 = {
+        'boxes': torch.tensor([[0, 0.5, 0.5, 0.1, 0.1]]), # cls, cx, cy, w, h
+        'image_id': 0, 'orig_size': torch.tensor([640, 640])
+    }
+    targets = [target1, target1]
+    
+    loss, loss_dict = criterion([pred], targets)
+    print(f"Loss: {loss.item():.4f}")
+    print(f"Dict: {loss_dict}")

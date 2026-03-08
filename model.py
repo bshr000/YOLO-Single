@@ -1,5 +1,5 @@
 """
-目标检测模型：基于ResNet骨干网络 + FPN + 检测头
+Backbone + PAN-FPN + Head
 """
 import torch
 import torch.nn as nn
@@ -117,10 +117,7 @@ class PANFPN(nn.Module):
     def __init__(self, in_channels_list, out_channels=256):
         super(PANFPN, self).__init__()
 
-        # -------------------------------
         # 1. Top-Down 部分（FPN）
-        # -------------------------------
-        # Lateral layers 
         self.lateral_layers = nn.ModuleList([
             nn.Conv2d(in_channels, out_channels, 1)
             for in_channels in in_channels_list
@@ -131,9 +128,7 @@ class PANFPN(nn.Module):
             for _ in in_channels_list
         ])
 
-        # -------------------------------
         # 2. Bottom-Up 部分（PAN）
-        # -------------------------------
         num_levels = len(in_channels_list)
 
         self.pan_downsample_layers = nn.ModuleList([
@@ -203,7 +198,6 @@ class ObjectDetector(nn.Module):
         
         self.backbone_type = 'resnet' if 'resnet' in backbone else 'csp'
 
-        # FPN
         fpn_out_channels = 256
         self.fpn = PANFPN(fpn_in_channels, fpn_out_channels)
         
@@ -236,7 +230,6 @@ class ObjectDetector(nn.Module):
             predictions: List of 3 tensors
                 Each: [B, num_anchors, Hi, Wi, 5+num_classes]
         """
-        # Backbone
         if self.backbone_type == 'resnet':
             x = self.conv1(x)
             x = self.bn1(x)
@@ -249,13 +242,10 @@ class ObjectDetector(nn.Module):
             c5 = self.layer4(c4)
             features = [c3, c4, c5]
         else:
-            # CSPDarknet forward
             features = self.backbone(x)
         
-        # FPN
         fpn_features = self.fpn(features)
         
-        # Detection heads
         predictions = []
         for i, (feature, head) in enumerate(zip(fpn_features, self.detect_heads)):
             pred = head(feature)
@@ -350,9 +340,6 @@ class ObjectDetector(nn.Module):
 
 
 def build_model(config):
-    """
-    根据配置构建模型
-    """
     num_classes = config['data']['num_classes']
     backbone = config['model']['backbone']
     num_anchors = config['model']['num_anchors']

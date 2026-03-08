@@ -1,6 +1,3 @@
-"""
-工具函数
-"""
 import os
 import random
 import numpy as np
@@ -10,9 +7,6 @@ from copy import deepcopy
 
 
 def setup_seed(seed):
-    """
-    设置随机种子
-    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -34,14 +28,12 @@ class ModelEMA:
         self.updates = updates  # number of EMA updates
         
         # decay exponential ramp (to help early epochs)
-        # decay 会随着 updates 增加逐渐从 0 增加到 0.9999
         self.decay = lambda x: decay * (1 - math.exp(-x / tau)) 
 
         for p in self.ema.parameters():
             p.requires_grad_(False)
 
     def update(self, model):
-        # Update EMA parameters
         with torch.no_grad():
             self.updates += 1
             d = self.decay(self.updates)
@@ -53,7 +45,6 @@ class ModelEMA:
                     v += (1 - d) * msd[k].detach()
 
     def update_attr(self, model, include=(), exclude=('process_group', 'reducer')):
-        # Update EMA attributes
         copy_attr(self.ema, model, include, exclude)
 
 
@@ -63,7 +54,6 @@ def is_parallel(model):
 
 
 def copy_attr(a, b, include=(), exclude=()):
-    # Copy attributes from b to a, options to only include() and to exclude()
     for k, v in b.__dict__.items():
         if (len(include) and k not in include) or k.startswith('_') or k in exclude:
             continue
@@ -72,11 +62,6 @@ def copy_attr(a, b, include=(), exclude=()):
 
 
 def save_checkpoint(path, model, optimizer, epoch, loss, ema=None):
-    """
-    保存checkpoint
-    Args:
-        ema: 如果提供了EMA模型，也保存它
-    """
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
@@ -93,26 +78,14 @@ def save_checkpoint(path, model, optimizer, epoch, loss, ema=None):
 
 
 def load_checkpoint(path):
-    """
-    加载checkpoint
-    """
     checkpoint = torch.load(path, map_location='cpu')
     return checkpoint
 
 
 def non_max_suppression(detections, nms_threshold=0.65):
-    """
-    Non-Maximum Suppression
-    Args:
-        detections: [N, 6] tensor - [class_id, confidence, cx, cy, w, h]
-        nms_threshold: IoU阈值
-    Returns:
-        keep_detections: [M, 6] tensor
-    """
     if len(detections) == 0:
         return detections
-    
-    # 按置信度排序
+
     scores = detections[:, 1]
     sorted_indices = torch.argsort(scores, descending=True)
     detections = detections[sorted_indices]
@@ -120,24 +93,17 @@ def non_max_suppression(detections, nms_threshold=0.65):
     keep = []
     
     while len(detections) > 0:
-        # 保留置信度最高的
-        keep.append(detections[0].unsqueeze(0))
-        
+        keep.append(detections[0].unsqueeze(0))      
         if len(detections) == 1:
             break
-        
-        # 计算与其余box的IoU
         ious = compute_iou_batch(
             detections[0:1, 2:6], 
             detections[1:, 2:6]
         )
-        
-        # 过滤掉同类别且IoU大于阈值的box
         same_class = detections[0, 0] == detections[1:, 0]
         high_iou = ious[0] > nms_threshold
         remove_mask = same_class & high_iou
-        
-        # 保留其余的box
+
         keep_mask = ~remove_mask
         detections = detections[1:][keep_mask]
     
@@ -150,15 +116,6 @@ def non_max_suppression(detections, nms_threshold=0.65):
 
 
 def compute_iou_batch(boxes1, boxes2):
-    """
-    批量计算IoU
-    Args:
-        boxes1: [N, 4] - [cx, cy, w, h]
-        boxes2: [M, 4] - [cx, cy, w, h]
-    Returns:
-        ious: [N, M]
-    """
-    # 转换为 [x1, y1, x2, y2]
     boxes1_x1 = boxes1[:, 0:1] - boxes1[:, 2:3] / 2
     boxes1_y1 = boxes1[:, 1:2] - boxes1[:, 3:4] / 2
     boxes1_x2 = boxes1[:, 0:1] + boxes1[:, 2:3] / 2
@@ -169,7 +126,6 @@ def compute_iou_batch(boxes1, boxes2):
     boxes2_x2 = boxes2[:, 0:1] + boxes2[:, 2:3] / 2
     boxes2_y2 = boxes2[:, 1:2] + boxes2[:, 3:4] / 2
     
-    # 计算交集
     inter_x1 = torch.max(boxes1_x1, boxes2_x1.t())
     inter_y1 = torch.max(boxes1_y1, boxes2_y1.t())
     inter_x2 = torch.min(boxes1_x2, boxes2_x2.t())
@@ -178,7 +134,6 @@ def compute_iou_batch(boxes1, boxes2):
     inter_area = torch.clamp(inter_x2 - inter_x1, min=0) * \
                  torch.clamp(inter_y2 - inter_y1, min=0)
     
-    # 计算并集
     boxes1_area = (boxes1_x2 - boxes1_x1) * (boxes1_y2 - boxes1_y1)
     boxes2_area = (boxes2_x2 - boxes2_x1) * (boxes2_y2 - boxes2_y1)
     union_area = boxes1_area + boxes2_area.t() - inter_area
@@ -189,12 +144,7 @@ def compute_iou_batch(boxes1, boxes2):
 
 
 def box_iou_numpy(box1, box2):
-    """
-    计算两个box的IoU (numpy版本)
-    Args:
-        box1, box2: [cx, cy, w, h]
-    """
-    # 转换为 [x1, y1, x2, y2]
+
     box1_x1 = box1[0] - box1[2] / 2
     box1_y1 = box1[1] - box1[3] / 2
     box1_x2 = box1[0] + box1[2] / 2
@@ -205,7 +155,6 @@ def box_iou_numpy(box1, box2):
     box2_x2 = box2[0] + box2[2] / 2
     box2_y2 = box2[1] + box2[3] / 2
     
-    # 计算交集
     inter_x1 = max(box1_x1, box2_x1)
     inter_y1 = max(box1_y1, box2_y1)
     inter_x2 = min(box1_x2, box2_x2)
@@ -213,34 +162,27 @@ def box_iou_numpy(box1, box2):
     
     inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
     
-    # 计算并集
     box1_area = (box1_x2 - box1_x1) * (box1_y2 - box1_y1)
     box2_area = (box2_x2 - box2_x1) * (box2_y2 - box2_y1)
     union_area = box1_area + box2_area - inter_area
     
     iou = inter_area / (union_area + 1e-6)
-    
     return iou
 
 
 def create_sample_data(output_dir='data', num_train=100, num_val=20):
-    """
-    创建示例数据（用于测试）
-    """
+
     import cv2
     import random
     
-    # 创建目录
     for split in ['train', 'val']:
         os.makedirs(os.path.join(output_dir, split, 'images'), exist_ok=True)
         os.makedirs(os.path.join(output_dir, split, 'labels'), exist_ok=True)
     
     def create_sample_image_and_label(idx, split):
-        # 创建随机图像
         img_h, img_w = 640, 640
         image = np.random.randint(0, 255, (img_h, img_w, 3), dtype=np.uint8)
         
-        # 随机生成目标
         num_objects = random.randint(1, 5)
         labels = []
         
@@ -251,7 +193,6 @@ def create_sample_data(output_dir='data', num_train=100, num_val=20):
             w = random.uniform(0.05, 0.3)
             h = random.uniform(0.05, 0.3)
             
-            # 在图像上绘制矩形（可视化）
             x1 = int((cx - w/2) * img_w)
             y1 = int((cy - h/2) * img_h)
             x2 = int((cx + w/2) * img_w)
@@ -262,21 +203,17 @@ def create_sample_data(output_dir='data', num_train=100, num_val=20):
             
             labels.append(f"{class_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
         
-        # 保存图像
         img_path = os.path.join(output_dir, split, 'images', f'{idx:05d}.jpg')
         cv2.imwrite(img_path, image)
         
-        # 保存标签
         label_path = os.path.join(output_dir, split, 'labels', f'{idx:05d}.txt')
         with open(label_path, 'w') as f:
             f.write('\n'.join(labels))
     
-    # 创建训练数据
     print(f"Creating {num_train} training samples...")
     for i in range(num_train):
         create_sample_image_and_label(i, 'train')
     
-    # 创建验证数据
     print(f"Creating {num_val} validation samples...")
     for i in range(num_val):
         create_sample_image_and_label(i, 'val')
@@ -285,5 +222,4 @@ def create_sample_data(output_dir='data', num_train=100, num_val=20):
 
 
 if __name__ == "__main__":
-    # 创建示例数据
     create_sample_data(num_train=100, num_val=20)

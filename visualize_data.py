@@ -1,6 +1,3 @@
-"""
-数据可视化脚本 - 查看数据集和标注
-"""
 import os
 import cv2
 import argparse

@@ -96,15 +96,14 @@ python inference.py --source path/to/images --config config.yaml --checkpoint ch
 
 ## 5. 结果示例
 
-### 5.1 指标示例（模板）
+### 5.1 val示例
 
-你可以将实验结果整理为表格放在这里：
 
 | Model | Input Size | Params (M) | GFLOPS | mAP@0.5 | mAP@0.5:0.95 |
 |------|------------|------------|--------|---------|--------------|
 | YOLO-Single (CSPDarknet-S) | 640 | - | - | - | - |
 
-### 5.2 可视化示例（模板）
+### 5.2 inference示例
 
 建议在仓库中新建 `assets/` 目录保存示例图，然后在 README 中引用：
 

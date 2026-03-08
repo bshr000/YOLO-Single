@@ -1,7 +1,3 @@
-"""
-YOLO格式数据集加载器
-支持多类别、多目标检测任务
-"""
 import os
 import cv2
 import torch
@@ -158,7 +154,6 @@ def collate_fn(batch):
 
 
 if __name__ == "__main__":
-    # 测试数据加载
     dataset = YOLODataset(
         image_dir="data/train/images",
         label_dir="data/train/labels",
